@@ -35,8 +35,11 @@
                     <img src="https://www.gstatic.com/images/branding/product/1x/g_suite_2020q4_48dp.png" class="w-4 h-4" alt="G">
                     <span>Connect Google</span>
                 </button>
+                <select id="calendarSelector" class="hidden px-4 py-2 border border-slate-300 rounded-lg bg-white hover:border-indigo-400 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 outline-none transition-all text-sm font-medium" onchange="handleCalendarSelect()">
+                    <option value="">Select a calendar...</option>
+                </select>
                 <button id="signOutBtn" onclick="handleSignoutClick()" class="hidden px-4 py-2 text-sm text-red-600 hover:bg-red-50 rounded-lg">Sign Out</button>
-                <button onclick="syncToCalendar()" id="syncBtn" class="bg-indigo-600 text-white px-5 py-2 rounded-lg hover:bg-indigo-700 font-semibold shadow-sm transition-all text-sm disabled:opacity-50 disabled:cursor-not-allowed">
+                <button onclick="syncToCalendar()" id="syncBtn" class="bg-indigo-600 text-white px-5 py-2 rounded-lg hover:bg-indigo-700 font-semibold shadow-sm transition-all text-sm disabled:opacity-50 disabled:cursor-not-allowed" disabled>
                     Sync Current Month
                 </button>
             </div>
@@ -126,7 +129,7 @@
         const CLIENT_ID = '276844562286-biq705124253b75ro3fgj2o0garfci2v.apps.googleusercontent.com'; 
         const API_KEY = 'AIzaSyCnDviyu5RBWmZfaY7c7bIvtkcTwet_X04';
         const DISCOVERY_DOC = 'https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest';
-        const SCOPES = 'https://www.googleapis.com/auth/calendar.events';
+        const SCOPES = 'https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/calendar.readonly';
 
         let tokenClient;
         let gapiInited = false;
@@ -135,6 +138,8 @@
         let currentYear = new Date().getFullYear();
         let currentMonth = new Date().getMonth();
         let selectedDate = null;
+        let selectedCalendarId = localStorage.getItem('selectedCalendarId') || null;
+        let userCalendars = [];
 
         let shiftTypes = JSON.parse(localStorage.getItem('shiftTypes')) || [
             { id: 1, name: 'Morning', start: '08:00', end: '16:00', color: '#6366f1' },
@@ -238,6 +243,10 @@
         }
 
         function openAssignModal(dateKey, dayNum) {
+            if (!selectedCalendarId) {
+                showToast('Please select a calendar first');
+                return;
+            }
             selectedDate = dateKey;
             document.getElementById('modalTitle').innerText = `Assign Shift: ${dayNum} ${document.getElementById('currentMonthDisplay').innerText}`;
             const container = document.getElementById('modalShiftOptions');
@@ -285,12 +294,57 @@
             if (gapiInited && gisInited) document.getElementById('syncBtn').disabled = false;
         }
 
+        async function loadCalendarList() {
+            try {
+                const response = await gapi.client.calendar.calendarList.list();
+                userCalendars = response.result.items || [];
+                
+                const selector = document.getElementById('calendarSelector');
+                selector.innerHTML = '<option value="">Select a calendar...</option>';
+                
+                userCalendars.forEach(cal => {
+                    const option = document.createElement('option');
+                    option.value = cal.id;
+                    option.textContent = cal.summary + (cal.primary ? ' (Primary)' : '');
+                    if (selectedCalendarId && cal.id === selectedCalendarId) {
+                        option.selected = true;
+                    }
+                    selector.appendChild(option);
+                });
+                
+                selector.classList.remove('hidden');
+                
+                // If a calendar was previously selected, enable sync
+                if (selectedCalendarId) {
+                    document.getElementById('syncBtn').disabled = false;
+                }
+            } catch (err) {
+                console.error('Error loading calendars:', err);
+                showToast('Error loading calendars');
+            }
+        }
+
+        function handleCalendarSelect() {
+            const selector = document.getElementById('calendarSelector');
+            selectedCalendarId = selector.value;
+            
+            if (selectedCalendarId) {
+                localStorage.setItem('selectedCalendarId', selectedCalendarId);
+                document.getElementById('syncBtn').disabled = false;
+                showToast('Calendar selected!');
+            } else {
+                localStorage.removeItem('selectedCalendarId');
+                document.getElementById('syncBtn').disabled = true;
+            }
+        }
+
         function handleAuthClick() {
             tokenClient.callback = async (resp) => {
                 if (resp.error !== undefined) throw (resp);
                 document.getElementById('authBtn').classList.add('hidden');
                 document.getElementById('signOutBtn').classList.remove('hidden');
                 showToast("Connected to Google!");
+                await loadCalendarList();
             };
             if (gapi.client.getToken() === null) tokenClient.requestAccessToken({prompt: 'consent'});
             else tokenClient.requestAccessToken({prompt: ''});
@@ -303,6 +357,10 @@
                 gapi.client.setToken('');
                 document.getElementById('authBtn').classList.remove('hidden');
                 document.getElementById('signOutBtn').classList.add('hidden');
+                document.getElementById('calendarSelector').classList.add('hidden');
+                document.getElementById('syncBtn').disabled = true;
+                selectedCalendarId = null;
+                localStorage.removeItem('selectedCalendarId');
                 showToast("Signed out.");
             }
         }
@@ -339,7 +397,7 @@
                     const timeMax = new Date(dateStr + 'T23:59:59Z').toISOString();
                     
                     const response = await gapi.client.calendar.events.list({
-                        'calendarId': 'primary',
+                        'calendarId': selectedCalendarId,
                         'timeMin': timeMin,
                         'timeMax': timeMax,
                         'q': `Shift:`
@@ -355,7 +413,7 @@
                             // Only delete if it starts with "Shift:" to avoid deleting personal non-shift events
                             if (event.summary && event.summary.startsWith("Shift:")) {
                                 await gapi.client.calendar.events.delete({
-                                    'calendarId': 'primary',
+                                    'calendarId': selectedCalendarId,
                                     'eventId': event.id
                                 });
                             }
@@ -370,7 +428,7 @@
                     };
 
                     await gapi.client.calendar.events.insert({
-                        'calendarId': 'primary',
+                        'calendarId': selectedCalendarId,
                         'resource': newEvent,
                     });
                 }
