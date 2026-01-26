@@ -35,7 +35,7 @@
                     <img src="https://www.gstatic.com/images/branding/product/1x/g_suite_2020q4_48dp.png" class="w-4 h-4" alt="G">
                     <span>Connect Google</span>
                 </button>
-                <select id="calendarSelector" class="hidden px-4 py-2 border border-slate-300 rounded-lg bg-white hover:border-indigo-400 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 outline-none transition-all text-sm font-medium" onchange="handleCalendarSelect()">
+                <select id="calendarSelector" class="hidden px-4 py-2 border border-slate-300 rounded-lg bg-white hover:border-indigo-400 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 outline-none transition-all text-sm font-medium" onchange="handleCalendarSelect()" onclick="refreshCalendarList()">
                     <option value="">Select a calendar...</option>
                 </select>
                 <button id="signOutBtn" onclick="handleSignoutClick()" class="hidden px-4 py-2 text-sm text-red-600 hover:bg-red-50 rounded-lg">Sign Out</button>
@@ -335,6 +335,33 @@
             } else {
                 localStorage.removeItem('selectedCalendarId');
                 document.getElementById('syncBtn').disabled = true;
+            }
+        }
+
+        async function refreshCalendarList() {
+            // Only refresh if user is authenticated
+            if (!gapi.client.getToken()) return;
+            
+            try {
+                const response = await gapi.client.calendar.calendarList.list();
+                userCalendars = response.result.items || [];
+                
+                const selector = document.getElementById('calendarSelector');
+                const currentSelection = selector.value; // Preserve current selection
+                
+                selector.innerHTML = '<option value="">Select a calendar...</option>';
+                
+                userCalendars.forEach(cal => {
+                    const option = document.createElement('option');
+                    option.value = cal.id;
+                    option.textContent = cal.summary + (cal.primary ? ' (Primary)' : '');
+                    if (currentSelection && cal.id === currentSelection) {
+                        option.selected = true;
+                    }
+                    selector.appendChild(option);
+                });
+            } catch (err) {
+                console.error('Error refreshing calendars:', err);
             }
         }
 
