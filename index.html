@@ -307,13 +307,12 @@
             }
         }
 
-        async function syncToCalendar() {
+         async function syncToCalendar() {
             if (!gapi.client.getToken()) {
                 handleAuthClick();
                 return;
             }
 
-            // Filter schedule for the CURRENTLY VISIBLE month and year only
             const visibleMonthPrefix = `${currentYear}-${String(currentMonth + 1).padStart(2, '0')}`;
             const monthSchedule = Object.keys(schedule).filter(date => date.startsWith(visibleMonthPrefix));
 
@@ -322,7 +321,7 @@
                 return;
             }
 
-            showToast(`Checking for duplicates...`);
+            showToast(`Syncing shifts...`);
 
             try {
                 for (const dateStr of monthSchedule) {
@@ -334,7 +333,8 @@
                     let endDate = new Date(dateStr + 'T' + shift.end);
                     if (endDate <= startDate) endDate.setDate(endDate.getDate() + 1);
 
-                    // SEARCH for existing event on this day to avoid duplicates
+                    // SEARCH for ANY existing "Shift:" event on this day
+                    // We search by query "Shift:" to find any event we might have created previously
                     const timeMin = new Date(dateStr + 'T00:00:00Z').toISOString();
                     const timeMax = new Date(dateStr + 'T23:59:59Z').toISOString();
                     
@@ -342,16 +342,27 @@
                         'calendarId': 'primary',
                         'timeMin': timeMin,
                         'timeMax': timeMax,
-                        'q': `Shift: ${shift.name}`
+                        'q': `Shift:`
                     });
 
                     const existing = response.result.items;
+                    
+                    // If an event exists, we check if it's the SAME shift or a different one.
+                    // To keep it simple and robust, we delete any existing shift on that day 
+                    // and replace it with the current selection.
                     if (existing && existing.length > 0) {
-                        console.log(`Skipping duplicate for ${dateStr}`);
-                        continue;
+                        for (const event of existing) {
+                            // Only delete if it starts with "Shift:" to avoid deleting personal non-shift events
+                            if (event.summary && event.summary.startsWith("Shift:")) {
+                                await gapi.client.calendar.events.delete({
+                                    'calendarId': 'primary',
+                                    'eventId': event.id
+                                });
+                            }
+                        }
                     }
 
-                    const event = {
+                    const newEvent = {
                         'summary': `Shift: ${shift.name}`,
                         'description': 'Created via ShiftSync App',
                         'start': { 'dateTime': startDate.toISOString(), 'timeZone': Intl.DateTimeFormat().resolvedOptions().timeZone },
@@ -360,10 +371,10 @@
 
                     await gapi.client.calendar.events.insert({
                         'calendarId': 'primary',
-                        'resource': event,
+                        'resource': newEvent,
                     });
                 }
-                showToast("Month synced successfully!");
+                showToast("Month synced and updated!");
             } catch (err) {
                 console.error(err);
                 showToast("Error syncing. Check console.");
