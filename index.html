@@ -65,6 +65,12 @@
                     3. Navigate to the month you want to sync.<br>
                     4. Click "Sync Current Month" to update your Google Calendar.
                 </p>
+                <div class="mt-4 pt-4 border-t border-indigo-200">
+                    <h3 class="text-xs font-bold text-indigo-800 uppercase mb-1">Security Note</h3>
+                    <p class="text-[10px] text-indigo-700 leading-tight italic">
+                        If hosting on GitHub, ensure you've added your URL to "Authorized JavaScript Origins" in Google Console to prevent unauthorized use of your Client ID.
+                    </p>
+                </div>
             </div>
         </div>
 
@@ -117,8 +123,8 @@
     </div>
 
     <script>
-        const CLIENT_ID = '276844562286-biq705124253b75ro3fgj2o0garfci2v.apps.googleusercontent.com'; 
-        const API_KEY = '';
+        const CLIENT_ID = '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'; 
+        const API_KEY = 'AIzaSyCnDviyu5RBWmZfaY7c7bIvtkcTwet_X04';
         const DISCOVERY_DOC = 'https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest';
         const SCOPES = 'https://www.googleapis.com/auth/calendar.events';
 
@@ -329,7 +335,6 @@
                     if (endDate <= startDate) endDate.setDate(endDate.getDate() + 1);
 
                     // SEARCH for existing event on this day to avoid duplicates
-                    // Define search window for this specific day
                     const timeMin = new Date(dateStr + 'T00:00:00Z').toISOString();
                     const timeMax = new Date(dateStr + 'T23:59:59Z').toISOString();
                     
