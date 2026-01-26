@@ -383,6 +383,8 @@
                 document.getElementById('signOutBtn').classList.remove('hidden');
                 showToast("Connected to Google!");
                 await loadCalendarList();
+                document.getElementById('refreshBtn').classList.remove('hidden');
+                document.getElementById('refreshBtn').disabled = false;
             };
             if (gapi.client.getToken() === null) tokenClient.requestAccessToken({prompt: 'consent'});
             else tokenClient.requestAccessToken({prompt: ''});
