@@ -106,14 +106,6 @@
             />
             <span>Connect Google</span>
           </button>
-          <select
-            id="calendarSelector"
-            class="hidden px-4 py-2 border border-slate-300 rounded-lg bg-white hover:border-indigo-400 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 outline-none transition-all text-sm font-medium"
-            onchange="handleCalendarSelect()"
-            onclick="refreshCalendarList()"
-          >
-            <option value="" disabled selected>Select a calendar...</option>
-          </select>
           <button
             id="signOutBtn"
             onclick="handleSignoutClick()"
@@ -329,11 +321,15 @@
       const DISCOVERY_DOC =
         "https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest";
       const SCOPES =
-        "https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/calendar.readonly";
+        "https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/calendar";
       // Used to identify ShiftSync-managed events (make this hard-to-guess).
       const SHIFT_SYNC_MANAGED_VALUE =
         "shiftsync_9f6c2a7d4b1e4c3aa0d8f7e2c1b9a6d5";
       const SHIFT_SYNC_PRIVATE_FILTER = `shiftSyncManaged=${SHIFT_SYNC_MANAGED_VALUE}`;
+      // Used to identify ShiftSync calendar in description (make this hard-to-guess).
+      const SHIFT_SYNC_CALENDAR_IDENTIFIER =
+        "shiftsync_cal_8e7f3c9a2d1b5e4f6c8a0d3b7e2f1c9a";
+      const SHIFT_SYNC_CALENDAR_NAME = "ShiftSync";
 
       let tokenClient;
       let gapiInited = false;
@@ -342,11 +338,10 @@
       let currentYear = new Date().getFullYear();
       let currentMonth = new Date().getMonth();
       let selectedDate = null;
-      let selectedCalendarId =
-        localStorage.getItem("selectedCalendarId") || null;
+      let selectedCalendarId = null;
       let userCalendars = [];
 
-      let shiftTypes = JSON.parse(localStorage.getItem("shiftTypes")) || [
+      let shiftTypes = [
         {
           id: 1,
           name: "Morning",
@@ -434,6 +429,118 @@
             `;
           })
           .join("");
+      }
+
+      async function findOrCreateShiftSyncCalendar() {
+        if (!gapi.client.getToken()) {
+          throw new Error("Not authenticated");
+        }
+
+        try {
+          // List all calendars
+          const response = await gapi.client.calendar.calendarList.list();
+          const calendars = response.result.items || [];
+
+          // Look for calendar with identifier in description (check all calendars)
+          for (const cal of calendars) {
+            try {
+              // Fetch full calendar details to check description
+              const fullCal = await gapi.client.calendar.calendars.get({
+                calendarId: cal.id,
+              });
+
+              // Check if description contains our identifier
+              const description = fullCal.result.description || "";
+              if (description.includes(SHIFT_SYNC_CALENDAR_IDENTIFIER)) {
+                selectedCalendarId = cal.id;
+                showToast("Using ShiftSync calendar");
+                return cal.id;
+              }
+            } catch (err) {
+              console.warn(`Could not fetch calendar ${cal.id} details:`, err);
+              continue;
+            }
+          }
+
+          // Not found - create a new calendar with identifier in description
+          const newCalendar = await gapi.client.calendar.calendars.insert({
+            resource: {
+              summary: SHIFT_SYNC_CALENDAR_NAME,
+              description: `ShiftSync Calendar - ID: ${SHIFT_SYNC_CALENDAR_IDENTIFIER}`,
+            },
+          });
+
+          selectedCalendarId = newCalendar.result.id;
+          showToast("Created ShiftSync calendar");
+          return newCalendar.result.id;
+        } catch (err) {
+          console.error("Error finding/creating ShiftSync calendar:", err);
+          throw err;
+        }
+      }
+
+      async function loadShiftTypesFromCalendar(calendarId) {
+        if (!calendarId) return null;
+
+        try {
+          const response = await gapi.client.calendar.calendars.get({
+            calendarId: calendarId,
+          });
+
+          // Look for shift types in description (format: "ShiftSync Calendar - ID: xxx\n\nSHIFT_TYPES_JSON: {...}")
+          const description = response.result.description || "";
+          const shiftTypesMatch = description.match(/SHIFT_TYPES_JSON:\s*(\{.*\})/s);
+          
+          if (shiftTypesMatch) {
+            try {
+              const parsed = JSON.parse(shiftTypesMatch[1]);
+              return Array.isArray(parsed) ? parsed : null;
+            } catch (parseErr) {
+              console.error("Error parsing shift types from description:", parseErr);
+              return null;
+            }
+          }
+          
+          return null;
+        } catch (err) {
+          console.error("Error loading shift types from calendar:", err);
+          return null;
+        }
+      }
+
+      async function saveShiftTypesToCalendar(calendarId, shiftTypes) {
+        if (!calendarId) {
+          console.warn("No calendar ID provided for saving shift types");
+          return false;
+        }
+
+        try {
+          // Get current calendar to preserve description identifier
+          const currentCal = await gapi.client.calendar.calendars.get({
+            calendarId: calendarId,
+          });
+
+          const currentDesc = currentCal.result.description || "";
+          // Extract the identifier line if it exists, or create it
+          let baseDesc = currentDesc.includes(SHIFT_SYNC_CALENDAR_IDENTIFIER)
+            ? currentDesc.split("SHIFT_TYPES_JSON:")[0].trim()
+            : `ShiftSync Calendar - ID: ${SHIFT_SYNC_CALENDAR_IDENTIFIER}`;
+
+          // Append shift types JSON to description
+          const newDescription = `${baseDesc}\n\nSHIFT_TYPES_JSON: ${JSON.stringify(shiftTypes)}`;
+
+          await gapi.client.calendar.calendars.patch({
+            calendarId: calendarId,
+            resource: {
+              description: newDescription,
+            },
+          });
+          return true;
+        } catch (err) {
+          console.error("Error saving shift types to calendar:", err);
+          showToast("Error saving shift types. Check console.");
+          return false;
+        }
       }
 
       function renderCalendar() {
@@ -561,10 +668,9 @@
                 `;
           list.appendChild(div);
         });
-        localStorage.setItem("shiftTypes", JSON.stringify(shiftTypes));
       }
 
-      function addNewShiftType() {
+      async function addNewShiftType() {
         const id = Date.now();
         shiftTypes.push({
           id,
@@ -575,9 +681,12 @@
           color: "#6366f1",
         });
         renderShiftTypes();
+        if (selectedCalendarId) {
+          await saveShiftTypesToCalendar(selectedCalendarId, shiftTypes);
+        }
       }
 
-      function updateShift(id, field, value) {
+      async function updateShift(id, field, value) {
         const shift = shiftTypes.find((s) => s.id === id);
         if (shift) {
           shift[field] = value;
@@ -591,15 +700,21 @@
         }
         renderShiftTypes();
         renderCalendar();
+        if (selectedCalendarId) {
+          await saveShiftTypesToCalendar(selectedCalendarId, shiftTypes);
+        }
       }
 
-      function removeShiftType(id) {
+      async function removeShiftType(id) {
         shiftTypes = shiftTypes.filter((s) => s.id !== id);
         Object.keys(schedule).forEach((k) => {
           if (schedule[k] == id) delete schedule[k];
         });
         renderShiftTypes();
         renderCalendar();
+        if (selectedCalendarId) {
+          await saveShiftTypesToCalendar(selectedCalendarId, shiftTypes);
+        }
       }
 
       function openAssignModal(dateKey, dayNum) {
@@ -609,9 +724,9 @@
           return;
         }
 
-        // Then check if calendar is selected
+        // Check if calendar is available
         if (!selectedCalendarId) {
-          showToast("Please select a calendar first");
+          showToast("Calendar not ready. Please try again.");
           return;
         }
 
@@ -672,98 +787,39 @@
           document.getElementById("syncBtn").disabled = false;
       }
 
-      async function loadCalendarList() {
-        try {
-          const response = await gapi.client.calendar.calendarList.list();
-          userCalendars = response.result.items || [];
-
-          const selector = document.getElementById("calendarSelector");
-          selector.innerHTML =
-            '<option value="" disabled selected>Select a calendar...</option>';
-
-          userCalendars.forEach((cal) => {
-            const option = document.createElement("option");
-            option.value = cal.id;
-            option.textContent =
-              cal.summary + (cal.primary ? " (Primary)" : "");
-            if (selectedCalendarId && cal.id === selectedCalendarId) {
-              option.selected = true;
-            }
-            selector.appendChild(option);
-          });
-
-          selector.classList.remove("hidden");
-
-          // If a calendar was previously selected, enable sync
-          if (selectedCalendarId) {
-            document.getElementById("syncBtn").disabled = false;
-          }
-        } catch (err) {
-          console.error("Error loading calendars:", err);
-          showToast("Error loading calendars");
-        }
-      }
-
-      function handleCalendarSelect() {
-        const selector = document.getElementById("calendarSelector");
-        selectedCalendarId = selector.value;
-
-        if (selectedCalendarId) {
-          localStorage.setItem("selectedCalendarId", selectedCalendarId);
-          document.getElementById("syncBtn").disabled = false;
-          showToast("Calendar selected!");
-          // Load shifts from Google Calendar when calendar is selected
-          loadShiftsFromCalendar();
-        } else {
-          localStorage.removeItem("selectedCalendarId");
-          document.getElementById("syncBtn").disabled = true;
-          schedule = {}; // Clear schedule when no calendar selected
-          renderCalendar();
-        }
-      }
-
-      async function refreshCalendarList() {
-        // Only refresh if user is authenticated
-        if (!gapi.client.getToken()) return;
-
-        try {
-          const response = await gapi.client.calendar.calendarList.list();
-          userCalendars = response.result.items || [];
-
-          const selector = document.getElementById("calendarSelector");
-          const currentSelection = selector.value; // Preserve current selection
-
-          selector.innerHTML =
-            '<option value="" disabled selected>Select a calendar...</option>';
-
-          userCalendars.forEach((cal) => {
-            const option = document.createElement("option");
-            option.value = cal.id;
-            option.textContent =
-              cal.summary + (cal.primary ? " (Primary)" : "");
-            if (currentSelection && cal.id === currentSelection) {
-              option.selected = true;
-            }
-            selector.appendChild(option);
-          });
-        } catch (err) {
-          console.error("Error refreshing calendars:", err);
-        }
-      }
-
       function handleAuthClick() {
         tokenClient.callback = async (resp) => {
           if (resp.error !== undefined) throw resp;
           document.getElementById("authBtn").classList.add("hidden");
           document.getElementById("signOutBtn").classList.remove("hidden");
           showToast("Connected to Google!");
-          await loadCalendarList();
-          await loadEventColors();
-          document.getElementById("refreshBtn").classList.remove("hidden");
-          document.getElementById("refreshBtn").disabled = false;
-          // Load shifts if calendar is already selected
-          if (selectedCalendarId) {
-            loadShiftsFromCalendar();
+
+          try {
+            // Find or create ShiftSync calendar
+            await findOrCreateShiftSyncCalendar();
+
+            // Load shift types from calendar
+            const loadedShiftTypes = await loadShiftTypesFromCalendar(
+              selectedCalendarId,
+            );
+            if (loadedShiftTypes && loadedShiftTypes.length > 0) {
+              shiftTypes = loadedShiftTypes;
+              renderShiftTypes();
+            }
+
+            // Load event colors for color picker
+            await loadEventColors();
+
+            // Enable UI
+            document.getElementById("refreshBtn").classList.remove("hidden");
+            document.getElementById("refreshBtn").disabled = false;
+            document.getElementById("syncBtn").disabled = false;
+
+            // Load existing shifts from calendar
+            await loadShiftsFromCalendar();
+          } catch (err) {
+            console.error("Error during authentication setup:", err);
+            showToast("Error setting up calendar. Check console.");
           }
         };
         if (gapi.client.getToken() === null)
@@ -778,11 +834,9 @@
           gapi.client.setToken("");
           document.getElementById("authBtn").classList.remove("hidden");
           document.getElementById("signOutBtn").classList.add("hidden");
-          document.getElementById("calendarSelector").classList.add("hidden");
           document.getElementById("refreshBtn").classList.add("hidden");
           document.getElementById("syncBtn").disabled = true;
           selectedCalendarId = null;
-          localStorage.removeItem("selectedCalendarId");
           schedule = {}; // Clear schedule on sign out
           googleEventColors = null;
           renderCalendar();
@@ -911,7 +965,7 @@
         }
 
         if (!selectedCalendarId) {
-          showToast("Please select a calendar first");
+          showToast("Calendar not ready. Please try again.");
           return;
         }
 
@@ -1042,11 +1096,38 @@
           }
         });
 
-        // Check if user was previously authenticated and load shifts
+        // Check if user was previously authenticated and setup calendar
         // This will be called after gapi initializes if token exists
-        setTimeout(() => {
-          if (gapi.client && gapi.client.getToken() && selectedCalendarId) {
-            loadShiftsFromCalendar();
+        setTimeout(async () => {
+          if (gapi.client && gapi.client.getToken()) {
+            try {
+              // Find or create ShiftSync calendar
+              await findOrCreateShiftSyncCalendar();
+
+              // Load shift types from calendar
+              const loadedShiftTypes = await loadShiftTypesFromCalendar(
+                selectedCalendarId,
+              );
+              if (loadedShiftTypes && loadedShiftTypes.length > 0) {
+                shiftTypes = loadedShiftTypes;
+                renderShiftTypes();
+              }
+
+              // Load event colors
+              await loadEventColors();
+
+              // Enable UI
+              document.getElementById("refreshBtn").classList.remove("hidden");
+              document.getElementById("refreshBtn").disabled = false;
+              document.getElementById("syncBtn").disabled = false;
+              document.getElementById("authBtn").classList.add("hidden");
+              document.getElementById("signOutBtn").classList.remove("hidden");
+
+              // Load existing shifts from calendar
+              await loadShiftsFromCalendar();
+            } catch (err) {
+              console.error("Error loading on page init:", err);
+            }
           }
         }, 1000);
       };
