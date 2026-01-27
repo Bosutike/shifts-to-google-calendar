@@ -758,58 +758,83 @@
           return;
         }
 
-        const visibleMonthPrefix = `${currentYear}-${String(currentMonth + 1).padStart(2, "0")}`;
-        const monthSchedule = Object.keys(schedule).filter((date) =>
-          date.startsWith(visibleMonthPrefix),
-        );
-
-        if (monthSchedule.length === 0) {
-          showToast("No shifts assigned for this month.");
+        if (!selectedCalendarId) {
+          showToast("Please select a calendar first");
           return;
         }
 
         showToast(`Syncing shifts...`);
 
         try {
-          for (const dateStr of monthSchedule) {
+          const monthPrefix = `${currentYear}-${String(currentMonth + 1).padStart(2, "0")}`;
+          const daysInMonth = new Date(currentYear, currentMonth + 1, 0).getDate();
+
+          // Fetch all ShiftSync-managed events in the month (single API call)
+          const monthTimeMin = new Date(currentYear, currentMonth, 1, 0, 0, 0).toISOString();
+          const monthTimeMax = new Date(
+            currentYear,
+            currentMonth,
+            daysInMonth,
+            23,
+            59,
+            59,
+          ).toISOString();
+
+          const monthEventsResp = await gapi.client.calendar.events.list({
+            calendarId: selectedCalendarId,
+            timeMin: monthTimeMin,
+            timeMax: monthTimeMax,
+            privateExtendedProperty: SHIFT_SYNC_PRIVATE_FILTER,
+            singleEvents: true,
+            orderBy: "startTime",
+          });
+
+          const monthEvents = monthEventsResp.result.items || [];
+
+          // Group managed events by day (YYYY-MM-DD)
+          const existingByDateKey = {};
+          for (const event of monthEvents) {
+            const isShiftSyncEvent =
+              event.extendedProperties?.private?.shiftSyncManaged ===
+              SHIFT_SYNC_MANAGED_VALUE;
+            if (!isShiftSyncEvent) continue;
+
+            const startDateTime = event.start?.dateTime || event.start?.date;
+            if (!startDateTime) continue;
+
+            const eventDate = new Date(startDateTime);
+            const dateKey = `${eventDate.getFullYear()}-${String(eventDate.getMonth() + 1).padStart(2, "0")}-${String(eventDate.getDate()).padStart(2, "0")}`;
+            if (!dateKey.startsWith(monthPrefix)) continue;
+
+            if (!existingByDateKey[dateKey]) existingByDateKey[dateKey] = [];
+            existingByDateKey[dateKey].push(event);
+          }
+
+          // For each day of the month:
+          // - If schedule has no shift: delete managed event(s) for that day (Clear behavior)
+          // - If schedule has shift: delete managed event(s) then insert the selected shift
+          for (let d = 1; d <= daysInMonth; d++) {
+            const dateStr = `${currentYear}-${String(currentMonth + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+
+            const existing = existingByDateKey[dateStr] || [];
+            for (const event of existing) {
+              await gapi.client.calendar.events.delete({
+                calendarId: selectedCalendarId,
+                eventId: event.id,
+              });
+            }
+
             const shiftId = schedule[dateStr];
+            if (!shiftId) {
+              continue;
+            }
+
             const shift = shiftTypes.find((s) => s.id == shiftId);
             if (!shift) continue;
 
             let startDate = new Date(dateStr + "T" + shift.start);
             let endDate = new Date(dateStr + "T" + shift.end);
             if (endDate <= startDate) endDate.setDate(endDate.getDate() + 1);
-
-            // SEARCH for ShiftSync-managed events on this day using extended properties
-            const timeMin = new Date(dateStr + "T00:00:00Z").toISOString();
-            const timeMax = new Date(dateStr + "T23:59:59Z").toISOString();
-
-            const response = await gapi.client.calendar.events.list({
-              calendarId: selectedCalendarId,
-              timeMin: timeMin,
-              timeMax: timeMax,
-              privateExtendedProperty: SHIFT_SYNC_PRIVATE_FILTER,
-            });
-
-            const existing = response.result.items;
-
-            // If an event exists, we check if it's the SAME shift or a different one.
-            // To keep it simple and robust, we delete any existing shift on that day
-            // and replace it with the current selection.
-            if (existing && existing.length > 0) {
-              for (const event of existing) {
-                // ONLY check the private extended property flag
-                const isShiftSyncEvent =
-                  event.extendedProperties?.private?.shiftSyncManaged ===
-                  SHIFT_SYNC_MANAGED_VALUE;
-                if (isShiftSyncEvent) {
-                  await gapi.client.calendar.events.delete({
-                    calendarId: selectedCalendarId,
-                    eventId: event.id,
-                  });
-                }
-              }
-            }
 
             const newEvent = {
               summary: `${shift.name}`,
