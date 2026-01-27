@@ -140,8 +140,10 @@
             <!-- Shift Items injected here -->
           </div>
           <button
+            id="addShiftTypeBtn"
             onclick="addNewShiftType()"
-            class="w-full py-2 border-2 border-dashed border-slate-200 rounded-lg text-slate-400 hover:text-indigo-600 hover:border-indigo-300 transition-all text-sm font-medium"
+            class="w-full py-2 border-2 border-dashed border-slate-200 rounded-lg text-slate-400 hover:text-indigo-600 hover:border-indigo-300 transition-all text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:text-slate-400 disabled:hover:border-slate-200"
+            disabled
           >
             + Add New Shift Type
           </button>
@@ -330,6 +332,9 @@
       const SHIFT_SYNC_CALENDAR_IDENTIFIER =
         "shiftsync_cal_8e7f3c9a2d1b5e4f6c8a0d3b7e2f1c9a";
       const SHIFT_SYNC_CALENDAR_NAME = "ShiftSync";
+      // Boundary markers for app-managed content in calendar description
+      const SHIFT_SYNC_DATA_START = "--- SHIFTSYNC DATA START ---";
+      const SHIFT_SYNC_DATA_END = "--- SHIFTSYNC DATA END ---";
 
       let tokenClient;
       let gapiInited = false;
@@ -341,24 +346,7 @@
       let selectedCalendarId = null;
       let userCalendars = [];
 
-      let shiftTypes = [
-        {
-          id: 1,
-          name: "Morning",
-          start: "08:00",
-          end: "16:00",
-          colorId: "1",
-          color: "#6366f1",
-        },
-        {
-          id: 2,
-          name: "Evening",
-          start: "16:00",
-          end: "00:00",
-          colorId: "5",
-          color: "#f59e0b",
-        },
-      ];
+      let shiftTypes = [];
 
       let schedule = {}; // No longer stored in localStorage - loaded from Google Calendar
       let googleEventColors = null; // { [colorId]: { background, foreground } }
@@ -462,11 +450,12 @@
             }
           }
 
-          // Not found - create a new calendar with identifier in description
+          // Not found - create a new calendar with identifier and boundary markers in description
+          const initialDescription = `ShiftSync Calendar - ID: ${SHIFT_SYNC_CALENDAR_IDENTIFIER}\n\n${SHIFT_SYNC_DATA_START}\nSHIFT_TYPES_JSON: []\n${SHIFT_SYNC_DATA_END}`;
           const newCalendar = await gapi.client.calendar.calendars.insert({
             resource: {
               summary: SHIFT_SYNC_CALENDAR_NAME,
-              description: `ShiftSync Calendar - ID: ${SHIFT_SYNC_CALENDAR_IDENTIFIER}`,
+              description: initialDescription,
             },
           });
 
@@ -487,9 +476,18 @@
             calendarId: calendarId,
           });
 
-          // Look for shift types in description (format: "ShiftSync Calendar - ID: xxx\n\nSHIFT_TYPES_JSON: {...}")
+          // Look for shift types within the boundary markers
           const description = response.result.description || "";
-          const shiftTypesMatch = description.match(/SHIFT_TYPES_JSON:\s*(\{.*\})/s);
+          const startIdx = description.indexOf(SHIFT_SYNC_DATA_START);
+          const endIdx = description.indexOf(SHIFT_SYNC_DATA_END);
+          
+          if (startIdx === -1 || endIdx === -1 || startIdx >= endIdx) {
+            return null;
+          }
+
+          // Extract content between boundaries
+          const dataSection = description.substring(startIdx + SHIFT_SYNC_DATA_START.length, endIdx).trim();
+          const shiftTypesMatch = dataSection.match(/SHIFT_TYPES_JSON:\s*(\[.*\]|\{.*\})/s);
           
           if (shiftTypesMatch) {
             try {
@@ -515,19 +513,68 @@
         }
 
         try {
-          // Get current calendar to preserve description identifier
+          // Get current calendar to preserve user content outside boundaries
           const currentCal = await gapi.client.calendar.calendars.get({
             calendarId: calendarId,
           });
 
           const currentDesc = currentCal.result.description || "";
-          // Extract the identifier line if it exists, or create it
-          let baseDesc = currentDesc.includes(SHIFT_SYNC_CALENDAR_IDENTIFIER)
-            ? currentDesc.split("SHIFT_TYPES_JSON:")[0].trim()
-            : `ShiftSync Calendar - ID: ${SHIFT_SYNC_CALENDAR_IDENTIFIER}`;
-
-          // Append shift types JSON to description
-          const newDescription = `${baseDesc}\n\nSHIFT_TYPES_JSON: ${JSON.stringify(shiftTypes)}`;
+          
+          // Extract user content before and after the boundary
+          const startIdx = currentDesc.indexOf(SHIFT_SYNC_DATA_START);
+          const endIdx = currentDesc.indexOf(SHIFT_SYNC_DATA_END);
+          
+          let beforeBoundary = "";
+          let afterBoundary = "";
+          
+          if (startIdx !== -1 && endIdx !== -1 && startIdx < endIdx) {
+            // Boundaries exist - extract user content
+            beforeBoundary = currentDesc.substring(0, startIdx).trim();
+            afterBoundary = currentDesc.substring(endIdx + SHIFT_SYNC_DATA_END.length).trim();
+          } else {
+            // No boundaries yet - check if there's existing content
+            // If description contains the identifier, use everything before it as user content
+            if (currentDesc.includes(SHIFT_SYNC_CALENDAR_IDENTIFIER)) {
+              const identifierIdx = currentDesc.indexOf(SHIFT_SYNC_CALENDAR_IDENTIFIER);
+              beforeBoundary = currentDesc.substring(0, identifierIdx).trim();
+              // Remove any old format data after identifier
+              const afterIdentifier = currentDesc.substring(identifierIdx);
+              const oldDataMatch = afterIdentifier.match(/SHIFT_TYPES_JSON:.*$/s);
+              if (oldDataMatch) {
+                const oldDataEnd = identifierIdx + afterIdentifier.indexOf(oldDataMatch[0]) + oldDataMatch[0].length;
+                afterBoundary = currentDesc.substring(oldDataEnd).trim();
+              }
+            } else {
+              // No identifier - preserve all existing content as user content
+              beforeBoundary = currentDesc.trim();
+            }
+          }
+          
+          // Build new description with boundaries
+          const dataSection = `SHIFT_TYPES_JSON: ${JSON.stringify(shiftTypes)}`;
+          const parts = [];
+          
+          // Add identifier if not already in beforeBoundary
+          if (!beforeBoundary.includes(SHIFT_SYNC_CALENDAR_IDENTIFIER)) {
+            parts.push(`ShiftSync Calendar - ID: ${SHIFT_SYNC_CALENDAR_IDENTIFIER}`);
+          }
+          
+          // Add user content before boundary
+          if (beforeBoundary) {
+            parts.push(beforeBoundary);
+          }
+          
+          // Add app-managed section with boundaries
+          parts.push(SHIFT_SYNC_DATA_START);
+          parts.push(dataSection);
+          parts.push(SHIFT_SYNC_DATA_END);
+          
+          // Add user content after boundary
+          if (afterBoundary) {
+            parts.push(afterBoundary);
+          }
+          
+          const newDescription = parts.join("\n\n");
 
           await gapi.client.calendar.calendars.patch({
             calendarId: calendarId,
@@ -671,6 +718,18 @@
       }
 
       async function addNewShiftType() {
+        // Check if user is logged in
+        if (!gapi.client.getToken()) {
+          showToast("Please log in to create shift types");
+          return;
+        }
+
+        // Check if calendar is available
+        if (!selectedCalendarId) {
+          showToast("Calendar not ready. Please try again.");
+          return;
+        }
+
         const id = Date.now();
         shiftTypes.push({
           id,
@@ -814,6 +873,7 @@
             document.getElementById("refreshBtn").classList.remove("hidden");
             document.getElementById("refreshBtn").disabled = false;
             document.getElementById("syncBtn").disabled = false;
+            document.getElementById("addShiftTypeBtn").disabled = false;
 
             // Load existing shifts from calendar
             await loadShiftsFromCalendar();
@@ -836,8 +896,10 @@
           document.getElementById("signOutBtn").classList.add("hidden");
           document.getElementById("refreshBtn").classList.add("hidden");
           document.getElementById("syncBtn").disabled = true;
+          document.getElementById("addShiftTypeBtn").disabled = true;
           selectedCalendarId = null;
           schedule = {}; // Clear schedule on sign out
+          shiftTypes = []; // Clear shift types on sign out
           googleEventColors = null;
           renderCalendar();
           renderShiftTypes();
@@ -1120,6 +1182,7 @@
               document.getElementById("refreshBtn").classList.remove("hidden");
               document.getElementById("refreshBtn").disabled = false;
               document.getElementById("syncBtn").disabled = false;
+              document.getElementById("addShiftTypeBtn").disabled = false;
               document.getElementById("authBtn").classList.add("hidden");
               document.getElementById("signOutBtn").classList.remove("hidden");
 
