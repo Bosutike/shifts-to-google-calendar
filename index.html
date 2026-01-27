@@ -149,7 +149,7 @@
             { id: 2, name: 'Evening', start: '16:00', end: '00:00', color: '#f59e0b' }
         ];
         
-        let schedule = JSON.parse(localStorage.getItem('schedule')) || {};
+        let schedule = {}; // No longer stored in localStorage - loaded from Google Calendar
 
         function renderCalendar() {
             const grid = document.getElementById('calendarGrid');
@@ -199,6 +199,10 @@
             if (currentMonth > 11) { currentMonth = 0; currentYear++; }
             if (currentMonth < 0) { currentMonth = 11; currentYear--; }
             renderCalendar();
+            // Load shifts from Google Calendar when month changes (if authenticated)
+            if (gapi.client.getToken() && selectedCalendarId) {
+                loadShiftsFromCalendar();
+            }
         }
 
         function renderShiftTypes() {
@@ -278,7 +282,7 @@
         function assignShift(shiftId) {
             if (shiftId === null) delete schedule[selectedDate];
             else schedule[selectedDate] = shiftId;
-            localStorage.setItem('schedule', JSON.stringify(schedule));
+            // No longer storing in localStorage - schedule is only in memory until synced
             renderCalendar();
             closeModal();
         }
@@ -343,9 +347,13 @@
                 localStorage.setItem('selectedCalendarId', selectedCalendarId);
                 document.getElementById('syncBtn').disabled = false;
                 showToast('Calendar selected!');
+                // Load shifts from Google Calendar when calendar is selected
+                loadShiftsFromCalendar();
             } else {
                 localStorage.removeItem('selectedCalendarId');
                 document.getElementById('syncBtn').disabled = true;
+                schedule = {}; // Clear schedule when no calendar selected
+                renderCalendar();
             }
         }
 
@@ -385,6 +393,10 @@
                 await loadCalendarList();
                 document.getElementById('refreshBtn').classList.remove('hidden');
                 document.getElementById('refreshBtn').disabled = false;
+                // Load shifts if calendar is already selected
+                if (selectedCalendarId) {
+                    loadShiftsFromCalendar();
+                }
             };
             if (gapi.client.getToken() === null) tokenClient.requestAccessToken({prompt: 'consent'});
             else tokenClient.requestAccessToken({prompt: ''});
@@ -398,10 +410,94 @@
                 document.getElementById('authBtn').classList.remove('hidden');
                 document.getElementById('signOutBtn').classList.add('hidden');
                 document.getElementById('calendarSelector').classList.add('hidden');
+                document.getElementById('refreshBtn').classList.add('hidden');
                 document.getElementById('syncBtn').disabled = true;
                 selectedCalendarId = null;
                 localStorage.removeItem('selectedCalendarId');
+                schedule = {}; // Clear schedule on sign out
+                renderCalendar();
                 showToast("Signed out.");
+            }
+        }
+
+        async function loadShiftsFromCalendar() {
+            if (!gapi.client.getToken()) {
+                showToast('Please log in first');
+                return;
+            }
+
+            if (!selectedCalendarId) {
+                showToast('Please select a calendar first');
+                return;
+            }
+
+            showToast('Loading shifts from Google Calendar...');
+
+            try {
+                // Calculate the date range for the current month
+                const firstDay = new Date(currentYear, currentMonth, 1);
+                const lastDay = new Date(currentYear, currentMonth + 1, 0);
+                
+                // Set timeMin to start of first day and timeMax to end of last day
+                const timeMin = new Date(currentYear, currentMonth, 1, 0, 0, 0).toISOString();
+                const timeMax = new Date(currentYear, currentMonth, lastDay.getDate(), 23, 59, 59).toISOString();
+
+                // Fetch all events for the current month
+                const response = await gapi.client.calendar.events.list({
+                    'calendarId': selectedCalendarId,
+                    'timeMin': timeMin,
+                    'timeMax': timeMax,
+                    'privateExtendedProperty': 'shiftSyncManaged=true',
+                    'singleEvents': true,
+                    'orderBy': 'startTime'
+                });
+
+                const events = response.result.items || [];
+                
+                // Clear current month's schedule
+                const monthPrefix = `${currentYear}-${String(currentMonth + 1).padStart(2, '0')}`;
+                Object.keys(schedule).forEach(key => {
+                    if (key.startsWith(monthPrefix)) {
+                        delete schedule[key];
+                    }
+                });
+
+                // Process each event and match to shift types
+                for (const event of events) {
+                    // Verify it's a ShiftSync event
+                    const isShiftSyncEvent = event.extendedProperties?.private?.shiftSyncManaged === 'true';
+                    if (!isShiftSyncEvent || !event.summary || !event.summary.startsWith("Shift:")) {
+                        continue;
+                    }
+
+                    // Extract shift name from summary (format: "Shift: {name}")
+                    const shiftName = event.summary.replace(/^Shift:\s*/, '').trim();
+                    
+                    // Find matching shift type by name
+                    const shift = shiftTypes.find(s => s.name === shiftName);
+                    if (!shift) {
+                        console.warn(`Shift type "${shiftName}" not found in local shift types`);
+                        continue;
+                    }
+
+                    // Extract date from event start time
+                    const startDateTime = event.start.dateTime || event.start.date;
+                    if (!startDateTime) continue;
+
+                    const eventDate = new Date(startDateTime);
+                    const dateKey = `${eventDate.getFullYear()}-${String(eventDate.getMonth() + 1).padStart(2, '0')}-${String(eventDate.getDate()).padStart(2, '0')}`;
+                    
+                    // Only add if it's in the current month
+                    if (dateKey.startsWith(monthPrefix)) {
+                        schedule[dateKey] = shift.id;
+                    }
+                }
+
+                renderCalendar();
+                showToast('Shifts loaded from Google Calendar!');
+            } catch (err) {
+                console.error('Error loading shifts:', err);
+                showToast('Error loading shifts. Check console.');
             }
         }
 
@@ -478,6 +574,8 @@
                     });
                 }
                 showToast("Month synced and updated!");
+                // Reload shifts from calendar to ensure display is accurate
+                await loadShiftsFromCalendar();
             } catch (err) {
                 console.error(err);
                 showToast("Error syncing. Check console.");
@@ -496,6 +594,14 @@
             renderCalendar();
             gapiLoaded();
             gisLoaded();
+            
+            // Check if user was previously authenticated and load shifts
+            // This will be called after gapi initializes if token exists
+            setTimeout(() => {
+                if (gapi.client && gapi.client.getToken() && selectedCalendarId) {
+                    loadShiftsFromCalendar();
+                }
+            }, 1000);
         };
     </script>
 </body>
