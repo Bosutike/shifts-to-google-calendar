@@ -350,9 +350,38 @@
         return shift?.color || "#6366f1";
       }
 
-      function renderColorOptions(selectedColorId) {
+      function toggleShiftColorPicker(shiftId) {
+        if (!googleEventColors) return;
+        closeAllShiftColorPickers(shiftId);
+        const menu = document.getElementById(`shiftColorMenu_${shiftId}`);
+        if (!menu) return;
+        const isHidden = menu.classList.contains("hidden");
+        if (isHidden) menu.classList.remove("hidden");
+        else menu.classList.add("hidden");
+      }
+
+      function closeAllShiftColorPickers(exceptShiftId = null) {
+        document
+          .querySelectorAll('[id^="shiftColorMenu_"]')
+          .forEach((el) => {
+            if (
+              exceptShiftId !== null &&
+              el.id === `shiftColorMenu_${exceptShiftId}`
+            ) {
+              return;
+            }
+            el.classList.add("hidden");
+          });
+      }
+
+      function setShiftColorId(shiftId, colorId) {
+        updateShift(shiftId, "colorId", String(colorId));
+        closeAllShiftColorPickers();
+      }
+
+      function renderColorSwatches(shiftId, selectedColorId) {
         if (!googleEventColors) {
-          return `<option value="" selected>Connect Google to load colors</option>`;
+          return "";
         }
 
         const ids = Object.keys(googleEventColors).sort(
@@ -360,9 +389,21 @@
         );
         return ids
           .map((id) => {
-            const selected =
-              String(selectedColorId || "") === String(id) ? "selected" : "";
-            return `<option value="${id}" ${selected}>Color ${id}</option>`;
+            const color = googleEventColors[id]?.background || "#000000";
+            const isSelected = String(selectedColorId) === String(id);
+            return `
+              <button
+                type="button"
+                class="w-6 h-6 rounded-full border ${
+                  isSelected
+                    ? "border-slate-900 ring-2 ring-slate-900/20"
+                    : "border-slate-200"
+                } hover:border-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-300"
+                style="background-color: ${color}"
+                title="Color ${id}"
+                onclick="setShiftColorId(${shiftId}, '${id}')"
+              ></button>
+            `;
           })
           .join("");
       }
@@ -465,15 +506,28 @@
                     </div>
                     <div class="flex items-center gap-2 text-xs text-slate-500">
                         <span class="font-medium">Color</span>
-                        <span class="inline-block w-3 h-3 rounded-full border border-slate-200" style="background-color: ${getShiftColorHex(shift)}"></span>
-                        <select
-                            class="bg-white border rounded px-2 py-1 text-xs flex-1 disabled:opacity-50"
-                            onchange="updateShift(${shift.id}, 'colorId', this.value)"
+                        <div class="relative" data-color-picker="true">
+                          <button
+                            type="button"
+                            class="w-6 h-6 rounded-full border border-slate-200 shadow-sm hover:border-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-300 disabled:opacity-50 disabled:cursor-not-allowed"
+                            style="background-color: ${getShiftColorHex(shift)}"
+                            title="${
+                              googleEventColors
+                                ? "Pick Google Calendar event color"
+                                : "Connect Google to load event colors"
+                            }"
+                            onclick="toggleShiftColorPicker(${shift.id})"
                             ${googleEventColors ? "" : "disabled"}
-                            title="${googleEventColors ? "Uses Google Calendar event colors" : "Connect Google to load event colors"}"
-                        >
-                            ${renderColorOptions(shift.colorId)}
-                        </select>
+                          ></button>
+                          <div
+                            id="shiftColorMenu_${shift.id}"
+                            class="hidden absolute left-0 mt-2 p-2 bg-white border border-slate-200 rounded-xl shadow-xl z-50"
+                          >
+                            <div class="grid grid-cols-6 gap-2">
+                              ${renderColorSwatches(shift.id, shift.colorId)}
+                            </div>
+                          </div>
+                        </div>
                     </div>
                 `;
           list.appendChild(div);
@@ -953,6 +1007,11 @@
         renderCalendar();
         gapiLoaded();
         gisLoaded();
+        document.addEventListener("click", (e) => {
+          if (!e.target.closest('[data-color-picker="true"]')) {
+            closeAllShiftColorPickers();
+          }
+        });
 
         // Check if user was previously authenticated and load shifts
         // This will be called after gapi initializes if token exists
