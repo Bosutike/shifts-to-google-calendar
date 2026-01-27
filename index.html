@@ -133,6 +133,9 @@
         const API_KEY = 'AIzaSyCnDviyu5RBWmZfaY7c7bIvtkcTwet_X04';
         const DISCOVERY_DOC = 'https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest';
         const SCOPES = 'https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/calendar.readonly';
+        // Used to identify ShiftSync-managed events (make this hard-to-guess).
+        const SHIFT_SYNC_MANAGED_VALUE = 'shiftsync_9f6c2a7d4b1e4c3aa0d8f7e2c1b9a6d5';
+        const SHIFT_SYNC_PRIVATE_FILTER = `shiftSyncManaged=${SHIFT_SYNC_MANAGED_VALUE}`;
 
         let tokenClient;
         let gapiInited = false;
@@ -447,7 +450,7 @@
                     'calendarId': selectedCalendarId,
                     'timeMin': timeMin,
                     'timeMax': timeMax,
-                    'privateExtendedProperty': 'shiftSyncManaged=true',
+                    'privateExtendedProperty': SHIFT_SYNC_PRIVATE_FILTER,
                     'singleEvents': true,
                     'orderBy': 'startTime'
                 });
@@ -464,14 +467,14 @@
 
                 // Process each event and match to shift types
                 for (const event of events) {
-                    // Verify it's a ShiftSync event
-                    const isShiftSyncEvent = event.extendedProperties?.private?.shiftSyncManaged === 'true';
-                    if (!isShiftSyncEvent || !event.summary || !event.summary.startsWith("Shift:")) {
+                    // Verify it's a ShiftSync event (ONLY this flag)
+                    const isShiftSyncEvent = event.extendedProperties?.private?.shiftSyncManaged === SHIFT_SYNC_MANAGED_VALUE;
+                    if (!isShiftSyncEvent || !event.summary) {
                         continue;
                     }
 
-                    // Extract shift name from summary (format: "Shift: {name}")
-                    const shiftName = event.summary.replace(/^Shift:\s*/, '').trim();
+                    // Summary is the shift name
+                    const shiftName = event.summary.trim();
                     
                     // Find matching shift type by name
                     const shift = shiftTypes.find(s => s.name === shiftName);
@@ -535,7 +538,7 @@
                         'calendarId': selectedCalendarId,
                         'timeMin': timeMin,
                         'timeMax': timeMax,
-                        'privateExtendedProperty': 'shiftSyncManaged=true'
+                        'privateExtendedProperty': SHIFT_SYNC_PRIVATE_FILTER
                     });
 
                     const existing = response.result.items;
@@ -545,9 +548,9 @@
                     // and replace it with the current selection.
                     if (existing && existing.length > 0) {
                         for (const event of existing) {
-                            // Double-check: verify both extended property AND summary prefix
-                            const isShiftSyncEvent = event.extendedProperties?.private?.shiftSyncManaged === 'true';
-                            if (isShiftSyncEvent && event.summary && event.summary.startsWith("Shift:")) {
+                            // ONLY check the private extended property flag
+                            const isShiftSyncEvent = event.extendedProperties?.private?.shiftSyncManaged === SHIFT_SYNC_MANAGED_VALUE;
+                            if (isShiftSyncEvent) {
                                 await gapi.client.calendar.events.delete({
                                     'calendarId': selectedCalendarId,
                                     'eventId': event.id
@@ -557,13 +560,13 @@
                     }
 
                     const newEvent = {
-                        'summary': `Shift: ${shift.name}`,
+                        'summary': `${shift.name}`,
                         'description': 'Created via ShiftSync App',
                         'start': { 'dateTime': startDate.toISOString(), 'timeZone': Intl.DateTimeFormat().resolvedOptions().timeZone },
                         'end': { 'dateTime': endDate.toISOString(), 'timeZone': Intl.DateTimeFormat().resolvedOptions().timeZone },
                         'extendedProperties': {
                             'private': {
-                                'shiftSyncManaged': 'true'
+                                'shiftSyncManaged': SHIFT_SYNC_MANAGED_VALUE
                             }
                         }
                     };
