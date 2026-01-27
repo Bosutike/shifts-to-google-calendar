@@ -451,7 +451,7 @@
           }
 
           // Not found - create a new calendar with identifier and boundary markers in description
-          const initialDescription = `ShiftSync Calendar - ID: ${SHIFT_SYNC_CALENDAR_IDENTIFIER}\n\n${SHIFT_SYNC_DATA_START}\nSHIFT_TYPES_JSON: []\n${SHIFT_SYNC_DATA_END}`;
+          const initialDescription = `${SHIFT_SYNC_DATA_START}\nShiftSync Calendar - ID: ${SHIFT_SYNC_CALENDAR_IDENTIFIER}\nSHIFT_TYPES_JSON: []\n${SHIFT_SYNC_DATA_END}`;
           const newCalendar = await gapi.client.calendar.calendars.insert({
             resource: {
               summary: SHIFT_SYNC_CALENDAR_NAME,
@@ -551,20 +551,17 @@
           }
           
           // Build new description with boundaries
-          const dataSection = `SHIFT_TYPES_JSON: ${JSON.stringify(shiftTypes)}`;
-          const parts = [];
+          // Identifier is now inside the boundary section
+          const dataSection = `ShiftSync Calendar - ID: ${SHIFT_SYNC_CALENDAR_IDENTIFIER}\nSHIFT_TYPES_JSON: ${JSON.stringify(shiftTypes)}`;
           
-          // Add identifier if not already in beforeBoundary
-          if (!beforeBoundary.includes(SHIFT_SYNC_CALENDAR_IDENTIFIER)) {
-            parts.push(`ShiftSync Calendar - ID: ${SHIFT_SYNC_CALENDAR_IDENTIFIER}`);
-          }
+          const parts = [];
           
           // Add user content before boundary
           if (beforeBoundary) {
             parts.push(beforeBoundary);
           }
           
-          // Add app-managed section with boundaries
+          // Add app-managed section with boundaries (identifier is inside)
           parts.push(SHIFT_SYNC_DATA_START);
           parts.push(dataSection);
           parts.push(SHIFT_SYNC_DATA_END);
