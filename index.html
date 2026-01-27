@@ -324,6 +324,7 @@
           name: "Morning",
           start: "08:00",
           end: "16:00",
+          colorId: "1",
           color: "#6366f1",
         },
         {
@@ -331,11 +332,40 @@
           name: "Evening",
           start: "16:00",
           end: "00:00",
+          colorId: "5",
           color: "#f59e0b",
         },
       ];
 
       let schedule = {}; // No longer stored in localStorage - loaded from Google Calendar
+      let googleEventColors = null; // { [colorId]: { background, foreground } }
+
+      function getShiftColorHex(shift) {
+        if (
+          shift?.colorId &&
+          googleEventColors?.[String(shift.colorId)]?.background
+        ) {
+          return googleEventColors[String(shift.colorId)].background;
+        }
+        return shift?.color || "#6366f1";
+      }
+
+      function renderColorOptions(selectedColorId) {
+        if (!googleEventColors) {
+          return `<option value="" selected>Connect Google to load colors</option>`;
+        }
+
+        const ids = Object.keys(googleEventColors).sort(
+          (a, b) => Number(a) - Number(b),
+        );
+        return ids
+          .map((id) => {
+            const selected =
+              String(selectedColorId || "") === String(id) ? "selected" : "";
+            return `<option value="${id}" ${selected}>Color ${id}</option>`;
+          })
+          .join("");
+      }
 
       function renderCalendar() {
         const grid = document.getElementById("calendarGrid");
@@ -388,7 +418,7 @@
             if (shift) {
               const badge = document.createElement("div");
               badge.className = "shift-badge text-white";
-              badge.style.backgroundColor = shift.color;
+              badge.style.backgroundColor = getShiftColorHex(shift);
               badge.innerText = `${shift.name} (${shift.start})`;
               cell.appendChild(badge);
             }
@@ -433,6 +463,18 @@
                         <span>to</span>
                         <input type="time" value="${shift.end}" onchange="updateShift(${shift.id}, 'end', this.value)" class="bg-white border rounded px-1">
                     </div>
+                    <div class="flex items-center gap-2 text-xs text-slate-500">
+                        <span class="font-medium">Color</span>
+                        <span class="inline-block w-3 h-3 rounded-full border border-slate-200" style="background-color: ${getShiftColorHex(shift)}"></span>
+                        <select
+                            class="bg-white border rounded px-2 py-1 text-xs flex-1 disabled:opacity-50"
+                            onchange="updateShift(${shift.id}, 'colorId', this.value)"
+                            ${googleEventColors ? "" : "disabled"}
+                            title="${googleEventColors ? "Uses Google Calendar event colors" : "Connect Google to load event colors"}"
+                        >
+                            ${renderColorOptions(shift.colorId)}
+                        </select>
+                    </div>
                 `;
           list.appendChild(div);
         });
@@ -446,6 +488,7 @@
           name: "New Shift",
           start: "09:00",
           end: "17:00",
+          colorId: "1",
           color: "#6366f1",
         });
         renderShiftTypes();
@@ -453,7 +496,16 @@
 
       function updateShift(id, field, value) {
         const shift = shiftTypes.find((s) => s.id === id);
-        if (shift) shift[field] = value;
+        if (shift) {
+          shift[field] = value;
+          if (
+            field === "colorId" &&
+            googleEventColors?.[String(value)]?.background
+          ) {
+            // Keep legacy color updated for UI fallbacks.
+            shift.color = googleEventColors[String(value)].background;
+          }
+        }
         renderShiftTypes();
         renderCalendar();
       }
@@ -491,7 +543,7 @@
           btn.className =
             "w-full text-left p-3 rounded-xl border border-slate-200 hover:border-indigo-300 hover:bg-indigo-50 text-sm font-medium transition-all flex justify-between items-center";
           btn.onclick = () => assignShift(shift.id);
-          btn.innerHTML = `<span>${shift.name} <span class="text-slate-400 font-normal ml-2">${shift.start} - ${shift.end}</span></span><div class="w-3 h-3 rounded-full" style="background-color: ${shift.color}"></div>`;
+          btn.innerHTML = `<span>${shift.name} <span class="text-slate-400 font-normal ml-2">${shift.start} - ${shift.end}</span></span><div class="w-3 h-3 rounded-full" style="background-color: ${getShiftColorHex(shift)}"></div>`;
           container.appendChild(btn);
         });
         document.getElementById("assignModal").classList.remove("hidden");
@@ -623,6 +675,7 @@
           document.getElementById("signOutBtn").classList.remove("hidden");
           showToast("Connected to Google!");
           await loadCalendarList();
+          await loadEventColors();
           document.getElementById("refreshBtn").classList.remove("hidden");
           document.getElementById("refreshBtn").disabled = false;
           // Load shifts if calendar is already selected
@@ -648,8 +701,24 @@
           selectedCalendarId = null;
           localStorage.removeItem("selectedCalendarId");
           schedule = {}; // Clear schedule on sign out
+          googleEventColors = null;
           renderCalendar();
+          renderShiftTypes();
           showToast("Signed out.");
+        }
+      }
+
+      async function loadEventColors() {
+        if (!gapi.client.getToken()) return;
+        try {
+          const resp = await gapi.client.calendar.colors.get();
+          googleEventColors = resp?.result?.event || null;
+          renderShiftTypes();
+          renderCalendar();
+        } catch (err) {
+          console.error("Error loading event colors:", err);
+          googleEventColors = null;
+          renderShiftTypes();
         }
       }
 
@@ -839,6 +908,7 @@
             const newEvent = {
               summary: `${shift.name}`,
               description: "Created via ShiftSync App",
+              ...(shift.colorId ? { colorId: String(shift.colorId) } : {}),
               start: {
                 dateTime: startDate.toISOString(),
                 timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
