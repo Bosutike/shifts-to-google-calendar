@@ -317,39 +317,13 @@
     </div>
 
     <script>
-      /*
-       * MIGRATION GUIDE (from ShiftSync to WorkSlots)
-       *
-       * If you were previously using the "ShiftSync" version of this app,
-       * your existing Google Calendar data will NOT be detected automatically
-       * because the stored identifiers have changed. To migrate:
-       *
-       * 1. Open Google Calendar and note down your current slot types
-       *    (names, start/end times, colors).
-       * 2. Delete the old "ShiftSync" calendar from Google Calendar:
-       *    Settings > ShiftSync > Remove calendar.
-       * 3. Deploy or open this updated WorkSlots app.
-       * 4. Sign in with Google — a new "WorkSlots" calendar will be
-       *    created automatically.
-       * 5. Re-create your slot types and re-assign slots to dates.
-       * 6. Click "Sync Current Month" to push them to the new calendar.
-       */
-
-      const CLIENT_ID =
+       const CLIENT_ID =
         "276844562286-biq705124253b75ro3fgj2o0garfci2v.apps.googleusercontent.com";
       const API_KEY = "AIzaSyCnDviyu5RBWmZfaY7c7bIvtkcTwet_X04";
       const DISCOVERY_DOC =
         "https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest";
       const SCOPES =
         "https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/calendar";
-      // --- OLD constants (used ONLY by the one-time migration function) ---
-      const OLD_SHIFTSYNC_CALENDAR_IDENTIFIER =
-        "shiftsync_cal_8e7f3c9a2d1b5e4f6c8a0d3b7e2f1c9a";
-      const OLD_SHIFTSYNC_MANAGED_VALUE =
-        "shiftsync_9f6c2a7d4b1e4c3aa0d8f7e2c1b9a6d5";
-      const OLD_SHIFTSYNC_DATA_START = "--- SHIFTSYNC DATA START ---";
-      const OLD_SHIFTSYNC_DATA_END = "--- SHIFTSYNC DATA END ---";
-
       // Used to identify WorkSlots-managed events (make this hard-to-guess).
       const WORK_SLOTS_MANAGED_VALUE =
         "workslots_9f6c2a7d4b1e4c3aa0d8f7e2c1b9a6d5";
@@ -489,113 +463,6 @@
         } catch (err) {
           console.error("Error finding/creating WorkSlots calendar:", err);
           throw err;
-        }
-      }
-
-      // =========================================================
-      // ONE-TIME MIGRATION: ShiftSync → WorkSlots
-      // Remove this entire function (and the old constants above)
-      // after running the migration once.
-      // =========================================================
-      async function migrateFromShiftSyncToWorkSlots() {
-        if (!gapi.client.getToken()) return false;
-
-        try {
-          const response = await gapi.client.calendar.calendarList.list();
-          const calendars = response.result.items || [];
-
-          let oldCalendarId = null;
-
-          // 1. Find the old ShiftSync calendar by its old identifier
-          for (const cal of calendars) {
-            try {
-              const fullCal = await gapi.client.calendar.calendars.get({
-                calendarId: cal.id,
-              });
-              const description = fullCal.result.description || "";
-              if (description.includes(OLD_SHIFTSYNC_CALENDAR_IDENTIFIER)) {
-                oldCalendarId = cal.id;
-                break;
-              }
-            } catch (err) {
-              continue;
-            }
-          }
-
-          if (!oldCalendarId) {
-            console.log("Migration: No old ShiftSync calendar found. Skipping.");
-            return false;
-          }
-
-          showToast("Migrating ShiftSync → WorkSlots...");
-
-          // 2. Get the current description
-          const calResp = await gapi.client.calendar.calendars.get({
-            calendarId: oldCalendarId,
-          });
-          let description = calResp.result.description || "";
-
-          // 3. Replace old identifiers with new ones in the description
-          description = description
-            .replace(OLD_SHIFTSYNC_DATA_START, WORK_SLOTS_DATA_START)
-            .replace(OLD_SHIFTSYNC_DATA_END, WORK_SLOTS_DATA_END)
-            .replace(OLD_SHIFTSYNC_CALENDAR_IDENTIFIER, WORK_SLOTS_CALENDAR_IDENTIFIER)
-            .replace(/SHIFT_TYPES_JSON:/g, "SLOT_TYPES_JSON:")
-            .replace(/ShiftSync Calendar - ID:/g, "WorkSlots Calendar - ID:");
-
-          // 4. Update calendar name and description
-          await gapi.client.calendar.calendars.patch({
-            calendarId: oldCalendarId,
-            resource: {
-              summary: WORK_SLOTS_CALENDAR_NAME,
-              description: description,
-            },
-          });
-
-          // 5. Migrate events: add new extended property, so the new code can find them
-          const now = new Date();
-          const timeMin = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0).toISOString();
-          const timeMax = new Date(now.getFullYear() + 1, 11, 31, 23, 59, 59).toISOString();
-
-          const eventsResp = await gapi.client.calendar.events.list({
-            calendarId: oldCalendarId,
-            timeMin: timeMin,
-            timeMax: timeMax,
-            privateExtendedProperty: `shiftSyncManaged=${OLD_SHIFTSYNC_MANAGED_VALUE}`,
-            singleEvents: true,
-            maxResults: 2500,
-          });
-
-          const events = eventsResp.result.items || [];
-          let migratedCount = 0;
-
-          for (const event of events) {
-            try {
-              await gapi.client.calendar.events.patch({
-                calendarId: oldCalendarId,
-                eventId: event.id,
-                resource: {
-                  extendedProperties: {
-                    private: {
-                      workSlotsManaged: WORK_SLOTS_MANAGED_VALUE,
-                      shiftSyncManaged: "", // clear old key
-                    },
-                  },
-                },
-              });
-              migratedCount++;
-            } catch (err) {
-              console.warn(`Migration: Failed to update event ${event.id}:`, err);
-            }
-          }
-
-          console.log(`Migration complete: calendar updated, ${migratedCount} events migrated.`);
-          showToast(`Migration done! Calendar + ${migratedCount} events updated.`);
-          return true;
-        } catch (err) {
-          console.error("Migration error:", err);
-          showToast("Migration failed. Check console.");
-          return false;
         }
       }
 
@@ -1001,9 +868,6 @@
           showToast("Connected to Google!");
 
           try {
-            // One-time migration from ShiftSync to WorkSlots
-            await migrateFromShiftSyncToWorkSlots();
-
             // Find or create WorkSlots calendar
             await findOrCreateWorkSlotsCalendar();
 
@@ -1323,9 +1187,6 @@
         setTimeout(async () => {
           if (gapi.client && gapi.client.getToken()) {
             try {
-              // One-time migration from ShiftSync to WorkSlots
-              await migrateFromShiftSyncToWorkSlots();
-
               // Find or create WorkSlots calendar
               await findOrCreateWorkSlotsCalendar();
 
