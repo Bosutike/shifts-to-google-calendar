@@ -1815,10 +1815,6 @@
       }
 
       async function setupAuthenticatedSession({ showConnectedToast = true } = {}) {
-        setAuthenticatedUI(true);
-        if (showConnectedToast) {
-          showToast("Connected to Google!");
-        }
         try {
           // Find or create WorkSlots calendar
           await findOrCreateWorkSlotsCalendar();
@@ -1836,8 +1832,15 @@
 
           // Load existing slots from calendar
           await loadSlotsFromCalendar();
+          setAuthenticatedUI(true);
+          if (showConnectedToast) {
+            showToast("Connected to Google!");
+          }
         } catch (err) {
           console.error("Error during authentication setup:", err);
+          gapi.client.setToken("");
+          clearCachedAuthState();
+          setAuthenticatedUI(false);
           showToast("Error setting up calendar. Check console.");
         }
       }
@@ -1851,7 +1854,9 @@
         tokenClient.callback = async (resp) => {
           if (resp.error !== undefined) {
             console.info("Silent auth restore failed:", resp.error);
+            gapi.client.setToken("");
             clearCachedAuthState();
+            setAuthenticatedUI(false);
             return;
           }
           cacheAuthState();
@@ -1862,7 +1867,9 @@
           tokenClient.requestAccessToken({ prompt: "" });
         } catch (err) {
           console.error("Unable to run silent auth restore:", err);
+          gapi.client.setToken("");
           clearCachedAuthState();
+          setAuthenticatedUI(false);
         }
       }
 
