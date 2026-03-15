@@ -1769,10 +1769,7 @@
         try {
           localStorage.setItem(
             AUTH_STATE_STORAGE_KEY,
-            JSON.stringify({
-              loggedIn: true,
-              updatedAt: Date.now(),
-            }),
+            JSON.stringify({ loggedIn: true, updatedAt: Date.now() }),
           );
         } catch (err) {
           console.warn("Unable to persist auth state:", err);
@@ -1832,6 +1829,7 @@
 
           // Load existing slots from calendar
           await loadSlotsFromCalendar();
+
           setAuthenticatedUI(true);
           if (showConnectedToast) {
             showToast("Connected to Google!");
@@ -1841,7 +1839,7 @@
           gapi.client.setToken("");
           clearCachedAuthState();
           setAuthenticatedUI(false);
-          showToast("Error setting up calendar. Check console.");
+          showToast("Session expired, please sign in again.");
         }
       }
 
@@ -1889,6 +1887,9 @@
         tokenClient.callback = async (resp) => {
           if (resp.error !== undefined) {
             console.error("Error during auth:", resp.error);
+            gapi.client.setToken("");
+            clearCachedAuthState();
+            setAuthenticatedUI(false);
             showToast("Authentication failed. Please try again.");
             return;
           }
